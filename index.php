@@ -33,11 +33,24 @@ function desensitizeUserName($user) {
     return substr($user, 0, 3) . "****" . substr($user, -4);
 }
 
+// 安全文件名过滤
+function getSafeFilename($username) {
+    // 移除可能引起路径遍历的字符
+    $safeName = preg_replace('/[^a-zA-Z0-9_\-@.]/', '_', $username);
+    // 限制文件名长度
+    if (strlen($safeName) > 100) {
+        $safeName = substr($safeName, 0, 100);
+    }
+    return $safeName;
+}
+
 class MiMotionRunner {
     private $user;
     private $password;
     public $logStr = "";
     public $invalid = false;
+    private $cacheDir = __DIR__ . '/cache/'; // 缓存目录，可自定义
+    private $cacheFile;
 
     function __construct($user, $passwd) {
         if (!$user || !$passwd) {
@@ -47,6 +60,87 @@ class MiMotionRunner {
         }
         $this->user = $user;
         $this->password = $passwd;
+
+        if (!is_dir($this->cacheDir)) {
+            mkdir($this->cacheDir, 0755, true);
+        }
+
+        $this->cacheFile = $this->cacheDir . getSafeFilename($user) . '.txt';
+    }
+
+	// 读取缓存
+    private function readCache() {
+        if (!file_exists($this->cacheFile)) {
+            return null;
+        }
+
+        $fp = fopen($this->cacheFile, 'r');
+        if (!$fp) {
+            return null;
+        }
+        
+        if (flock($fp, LOCK_SH)) {
+            $data = file_get_contents($this->cacheFile);
+            flock($fp, LOCK_UN);
+            fclose($fp);
+            
+            $cache = json_decode($data, true);
+
+            if (!$cache || !isset($cache['expire_time']) || $cache['expire_time'] < time()) {
+                $this->clearCache();
+                return null;
+            }
+            
+            return $cache;
+        } else {
+            fclose($fp);
+            return null;
+        }
+    }
+
+	// 写入缓存
+    private function writeCache($access, $third_name) {
+        $cacheData = [
+            'access' => $access,
+            'third_name' => $third_name,
+            'user' => $this->user,
+            'create_time' => time(),
+            'expire_time' => time() + 604800 // 7天后过期（暂时还不知道具体多久过期，后续可能修改）
+        ];
+        
+        $jsonData = json_encode($cacheData);
+        
+        // 保险起见先写入临时文件，然后重命名
+        $tempFile = $this->cacheFile . '.tmp.' . uniqid();
+        
+        $fp = fopen($tempFile, 'w');
+        if (!$fp) {
+            return false;
+        }
+        
+        if (flock($fp, LOCK_EX)) {
+            fwrite($fp, $jsonData);
+            fflush($fp);
+            flock($fp, LOCK_UN);
+            fclose($fp);
+            if (rename($tempFile, $this->cacheFile)) {
+                return true;
+            } else {
+                unlink($tempFile);
+                return false;
+            }
+        } else {
+            fclose($fp);
+            unlink($tempFile);
+            return false;
+        }
+    }
+
+	// 清除缓存
+    private function clearCache() {
+        if (file_exists($this->cacheFile)) {
+            unlink($this->cacheFile);
+        }
     }
 
     private function encryptData($plain) {
@@ -93,7 +187,13 @@ class MiMotionRunner {
     }
 
     private function getAccess($username, $password) {
-        // 判断账号类型
+        // 首先尝试从缓存读取
+        $cache = $this->readCache();
+        if ($cache && isset($cache['access']) && isset($cache['third_name'])) {
+            return [$cache['access'], $cache['third_name']];
+        }
+
+        // 缓存不存在或已过期，从API获取
         $third_name = strpos($username, '@') === false ? 'huami_phone' : 'email';
         
         if (!strpos($username, '@')) $username = '+86' . $username;
@@ -110,10 +210,16 @@ class MiMotionRunner {
         $body = $this->encryptData(http_build_query($data));
         $response = $this->curl($url, $body, null, true);
         if (preg_match("/access=(.*?)&/", $response['header'], $access)) {
+            // 成功获取，写入缓存
+            $this->writeCache($access[1], $third_name);
             return [$access[1], $third_name];
         } elseif (preg_match("/refresh=(.*?)&/", $response['header'], $refresh)) {
+            // 成功获取，写入缓存
+            $this->writeCache($refresh[1], $third_name);
             return [$refresh[1], $third_name];
         } elseif (strpos($response['header'], 'error=')) {
+            // 登录失败时清除可能存在的旧缓存
+            $this->clearCache();
             throw new Exception('账号或密码错误！');
         } else {
             throw new Exception('登录token接口请求失败');
@@ -147,6 +253,8 @@ class MiMotionRunner {
                 $userid = $arr['token_info']['user_id'];
                 return [$token, $userid];
             } else {
+                // 登录失败时清除缓存，因为token可能已失效
+                $this->clearCache();
                 throw new Exception('登录失败' . $response['body']);
             }
         } catch (Exception $e) {
