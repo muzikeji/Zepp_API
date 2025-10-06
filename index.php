@@ -5,10 +5,11 @@
  * user  - 账号（手机号或邮箱）
  * pwd   - 密码
  * step  - 固定步数（必填）
- *
+ * token - 和下面预设一致(如：147369)
  * 示例：
  * curl "http://你的服务器/index.php?user=13800138000&pwd=123456&step=20000&token=147369"
  */
+    header("Content-Type: application/json; charset=utf-8");
 
 $token = "147369";
 
