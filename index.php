@@ -13,10 +13,12 @@
 
 $token = "147369";
 
-if (!isset($_GET['token']) || $_GET['token'] !== $token) {
+// 先从 GET 中获取 token，如果没有，再从 POST 中获取
+$submitted_token = isset($_GET['token']) ? $_GET['token'] : (isset($_POST['token']) ? $_POST['token'] : null);
+
+if ($submitted_token !== $token) {
     die("密码错误或为空");
 }
-
 date_default_timezone_set('Asia/Shanghai');
 
 // 从 POST 获取参数，否则从 GET 获取
