@@ -17,7 +17,7 @@ $token = "147369";
 $submitted_token = isset($_GET['token']) ? $_GET['token'] : (isset($_POST['token']) ? $_POST['token'] : null);
 
 if ($submitted_token !== $token) {
-    die("密码错误或为空");
+    die("token错误或为空");
 }
 date_default_timezone_set('Asia/Shanghai');
 
